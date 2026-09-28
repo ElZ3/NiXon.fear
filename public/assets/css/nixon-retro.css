@@ -1,0 +1,388 @@
+/* ==========================================================================
+   NiXon.fear — System OS & CRT Retro-Noir Stylesheet
+   Windows 95 oscuro y dañado: bordes biselados, plomo/negro, acento verde.
+   ========================================================================== */
+
+:root {
+  --win-bg: #008080;
+  --panel-bg: #c0c0c0;
+  --panel-dark: #1a1a1a;
+  --panel-darker: #0f0f0f;
+  --crt-green: #00ff66;
+  --crt-green-glow: #00ff6680;
+  --dark-noir: #0a0a0c;
+  --terminal-red: #ff3333;
+  --terminal-yellow: #ffcc00;
+  --border-light: #6a6a6a;
+  --border-dark: #000000;
+}
+
+/* 1. RESET Y CONFIGURACIÓN GENERAL
+   -------------------------------------------------------------------------- */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--dark-noir);
+  font-family: 'Courier New', Courier, monospace;
+  color: var(--crt-green);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+a { color: inherit; }
+
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #050505; }
+::-webkit-scrollbar-thumb { background: #333; border: 1px solid var(--crt-green); }
+
+/* 2. EFECTO CRT, SCANLINES Y "HARDWARE DAÑADO"
+   -------------------------------------------------------------------------- */
+.crt-overlay {
+  position: fixed;
+  top: 0; left: 0; width: 100vw; height: 100vh;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+  background-size: 100% 4px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+body.crt-body {
+  background-color: #000000;
+  color: var(--crt-green);
+}
+
+/* Contenedor objetivo de flicker.js: variaciones de opacity/transform en
+   JS se aplican sobre este wrapper. La clase solo fija el punto de anclaje. */
+[data-flicker] {
+  will-change: transform, opacity;
+}
+
+/* Glitch cromático ocasional en el borde de las ventanas: sutil, vía CSS puro,
+   independiente del JS (que maneja el temblor del contenedor general). */
+@keyframes window-corruption {
+  0%, 92%, 100% { box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.9); }
+  93% { box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.9), -2px 0 0 rgba(255, 0, 60, 0.5), 2px 0 0 rgba(0, 255, 249, 0.35); }
+  95% { box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.9); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-flicker], .win95-window, .sprite-idle, .terminal-status-blink {
+    animation: none !important;
+  }
+}
+
+/* 3. ARQUITECTURA DE VENTANAS WIN95 OSCURO/DAÑADO
+   -------------------------------------------------------------------------- */
+.win95-window {
+  background-color: var(--panel-dark);
+  border-style: solid;
+  border-width: 2px;
+  border-color: var(--border-light) var(--border-dark) var(--border-dark) var(--border-light);
+  box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.9);
+  color: var(--crt-green);
+  animation: window-corruption 9s infinite;
+}
+
+/* Variante "inset" (hundida), usada para paneles internos / campos de solo lectura. */
+.win95-panel-inset {
+  border-style: solid;
+  border-width: 2px;
+  border-color: var(--border-dark) var(--border-light) var(--border-light) var(--border-dark);
+  background-color: #050505;
+}
+
+.login-window {
+  max-width: 520px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.win95-titlebar {
+  background: linear-gradient(90deg, #1a1a1a, #2c2c2c);
+  border-bottom: 2px solid var(--border-dark);
+  color: var(--crt-green);
+  padding: 4px 8px;
+  font-weight: bold;
+  font-size: 0.85rem;
+  font-family: 'Tahoma', 'Segoe UI', sans-serif;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.win95-close-btn {
+  background: #222222;
+  color: var(--terminal-red);
+  border-style: solid;
+  border-width: 2px;
+  border-color: var(--border-light) var(--border-dark) var(--border-dark) var(--border-light);
+  width: 20px;
+  height: 20px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0;
+  font-family: 'Tahoma', sans-serif;
+}
+
+.win95-close-btn:active {
+  border-color: var(--border-dark) var(--border-light) var(--border-light) var(--border-dark);
+}
+
+.win95-body {
+  background-color: #121212;
+  padding: 1.25rem;
+}
+
+.win95-divider {
+  border: 0;
+  border-top: 2px solid var(--border-dark);
+  border-bottom: 1px solid var(--border-light);
+  margin: 1.5rem 0;
+}
+
+/* 4. BOTONES, CONTROLES E INPUTS (bisel 3D grueso)
+   -------------------------------------------------------------------------- */
+.win95-button {
+  background-color: #222222;
+  color: var(--crt-green);
+  border-style: solid;
+  border-width: 3px;
+  border-color: var(--border-light) var(--border-dark) var(--border-dark) var(--border-light);
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  text-transform: uppercase;
+  text-align: left;
+  border-radius: 0;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background-color 0.1s, color 0.1s;
+}
+
+.win95-button:hover,
+.win95-button:focus {
+  background-color: var(--crt-green);
+  color: #000000;
+  outline: none;
+}
+
+.win95-button:active {
+  border-color: var(--border-dark) var(--border-light) var(--border-light) var(--border-dark);
+  box-shadow: inset 1px 1px 0px #000000;
+}
+
+.win95-button .btn-subtext {
+  font-size: 0.7rem;
+  color: #888888;
+  display: block;
+  margin-top: 2px;
+  font-weight: normal;
+  text-transform: none;
+}
+
+.win95-button:hover .btn-subtext { color: #111111; }
+
+.win95-button--danger { color: var(--terminal-red); }
+.win95-button--danger:hover { background-color: var(--terminal-red); color: #000; }
+
+.win95-input {
+  background-color: #000000 !important;
+  color: var(--crt-green) !important;
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: var(--border-dark) var(--border-light) var(--border-light) var(--border-dark) !important;
+  border-radius: 0;
+  font-family: 'Courier New', monospace;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.win95-input:focus {
+  box-shadow: 0 0 6px var(--crt-green-glow);
+  outline: none;
+}
+
+/* 5. TIPOGRAFÍA Y ESTADOS DEL TERMINAL
+   -------------------------------------------------------------------------- */
+.terminal-title { font-size: 1.25rem; font-weight: bold; color: #ffffff; letter-spacing: 1px; margin-bottom: 2px; }
+.terminal-subtext { color: #aaaaaa; font-size: 0.85rem; margin-bottom: 1rem; }
+.terminal-label { color: var(--crt-green); font-weight: bold; font-size: 0.9rem; }
+.terminal-warning { color: var(--terminal-red); font-weight: bold; text-shadow: 0 0 4px rgba(255, 51, 51, 0.4); }
+.terminal-status { color: var(--crt-green); background: #050505; padding: 10px; border: 1px solid var(--crt-green); font-size: 0.85rem; }
+.terminal-error { background-color: #330000; color: var(--terminal-red); border: 1px solid var(--terminal-red); padding: 8px 12px; font-weight: bold; font-size: 0.85rem; }
+.terminal-success { background-color: #002200; color: var(--crt-green); border: 1px solid var(--crt-green); padding: 8px 12px; font-weight: bold; font-size: 0.85rem; }
+.terminal-ghost { color: #666666; font-size: 0.8rem; }
+.terminal-status-blink { animation: blink 1.5s infinite; color: var(--crt-green); font-size: 1.1rem; }
+
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+.vance-block {
+  border-left: 3px solid var(--crt-green);
+  padding-left: 10px;
+  background-color: rgba(0, 255, 102, 0.05);
+  font-size: 0.85rem;
+  color: #cccccc;
+}
+
+.auth-switch-link {
+  display: block;
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  color: #888888;
+  text-align: center;
+}
+
+.auth-switch-link a { color: var(--crt-green); text-decoration: underline; }
+
+/* 6. COMPONENTES DEL JUEGO Y PANEL DE PERFIL
+   -------------------------------------------------------------------------- */
+#game-canvas-container {
+  border: 2px solid #000000;
+  background: #000000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.character-sprite-container {
+  border-style: solid;
+  border-width: 2px;
+  border-color: var(--border-dark) var(--border-light) var(--border-light) var(--border-dark);
+  background-color: #080808;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 260px;
+  width: 100%;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.character-sprite-container:hover {
+  box-shadow: 0 0 12px var(--crt-green-glow);
+}
+
+.sprite-idle {
+  animation: idle-float 3.2s ease-in-out infinite;
+  image-rendering: pixelated;
+}
+
+@keyframes idle-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.character-sprite-label {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: var(--crt-green);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+/* 7. TARJETAS DE NIVELES / ÍCONOS DE CARPETA Y REJILLA DE MEDALLAS
+   -------------------------------------------------------------------------- */
+.level-folder-card {
+  border-style: solid;
+  border-width: 2px;
+  border-color: var(--crt-green) #000000 #000000 var(--crt-green);
+  background-color: #0d0d0d;
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  transition: background-color 0.12s, box-shadow 0.12s;
+}
+
+.level-folder-card:hover {
+  background-color: rgba(0, 255, 102, 0.08);
+  box-shadow: 0 0 10px var(--crt-green-glow);
+}
+
+.level-folder-card--locked {
+  cursor: not-allowed;
+  opacity: 0.5;
+  border-color: #555555 #000000 #000000 #555555;
+}
+
+.level-folder-card--locked:hover {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.folder-icon {
+  font-size: 2rem;
+  line-height: 1;
+  color: var(--terminal-yellow);
+  filter: drop-shadow(0 0 3px rgba(255, 204, 0, 0.4));
+}
+
+.level-folder-card--locked .folder-icon { color: #555555; filter: none; }
+
+.level-card { max-width: 100%; }
+.level-status { color: var(--crt-green); font-weight: bold; font-size: 0.85rem; }
+.level-status--locked { color: #888888; }
+
+.medal-slot {
+  padding: 10px;
+  border: 1px dashed #333333;
+  text-align: center;
+  background-color: #0a0a0a;
+  min-height: 75px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.medal-label { font-size: 0.75rem; font-weight: bold; margin-bottom: 4px; }
+.medal-badge { font-size: 0.7rem; }
+
+.medal-recovered { color: var(--crt-green); border: 1px solid var(--crt-green); background-color: rgba(0, 255, 102, 0.08); }
+.medal-corrupt { color: var(--terminal-red); border: 1px solid var(--terminal-red); background-color: rgba(255, 51, 51, 0.08); }
+.medal-unregistered { color: var(--terminal-yellow); border: 1px solid var(--terminal-yellow); background-color: rgba(255, 204, 0, 0.08); }
+.medal-locked { color: #555555; border: 1px dashed #333333; }
+
+/* 8. VENTANAS MODALES (confirmación / "PRÓXIMAMENTE" / detalle de nivel)
+   -------------------------------------------------------------------------- */
+.win95-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 16px;
+}
+
+.win95-modal-overlay.is-open {
+  display: flex;
+}
+
+.win95-modal {
+  max-width: 460px;
+  width: 100%;
+}
+
+.win95-modal .win95-body {
+  padding: 1.5rem;
+}
+
+.win95-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
