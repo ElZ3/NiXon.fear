@@ -386,3 +386,85 @@ body.crt-body {
   margin-top: 1.25rem;
   flex-wrap: wrap;
 }
+
+/* 9. CONTENEDOR DEL JUEGO PHASER (Nivel 1) — tarea 1.2
+   Centra el canvas a viewport completo sin alterar el tema retro. */
+#game-container {
+  width: 100vw;
+  height: 100vh;
+  margin: 0 auto;
+  overflow: hidden;
+  display: block;
+}
+
+/* 10. PANEL DE NOTAS HTMX (Actividad 2) — indicador de carga estilo terminal.
+   HTMX añade .htmx-request al elemento indicador y al emisor durante la
+   petición; se cubren ambos casos (clase directa y ancestro emisor). */
+#cargando {
+  display: none;
+  margin-top: 10px;
+  padding: 6px 10px;
+  background-color: #050505;
+  border: 1px solid var(--crt-green);
+  font-size: 0.85rem;
+}
+
+#cargando.htmx-request {
+  display: block;
+}
+
+.htmx-request #cargando {
+  display: block;
+}
+
+#cargando .terminal-status-blink {
+  animation: blink 1s infinite;
+}
+
+/* 11. PANEL GAME MASTER (Fase A2 Parcial II) — solo clases nuevas.
+   Reutiliza botones/ventanas/tipografía existentes; sin tocar el juego. */
+.win95-button--small {
+  border-width: 2px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+}
+
+.gm-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.gm-owner {
+  overflow-wrap: anywhere;
+}
+
+.gm-status {
+  min-height: 1.2em;
+  margin: 10px 0 0;
+}
+
+.gm-audit-list {
+  padding: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.gm-audit-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: 6px 4px;
+  border-bottom: 1px dashed #333333;
+  font-size: 0.8rem;
+}
+
+.gm-audit-row:last-child {
+  border-bottom: 0;
+}
+
+.gm-res-ok { color: var(--crt-green); font-weight: bold; }
+.gm-res-denied { color: var(--terminal-yellow); font-weight: bold; }
+.gm-res-err { color: var(--terminal-red); font-weight: bold; }

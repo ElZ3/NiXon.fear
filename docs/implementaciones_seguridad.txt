@@ -1,0 +1,256 @@
+IMPLEMENTACIONES DE SEGURIDAD — NiXon.fear (que protege cada una, donde esta, toggle SOLO-DEMO)
+====================================================================================================
+Lenguaje sencillo. Sin tocar codigo en la demo real: los "toggles" de abajo son
+SOLO para mostrar en vivo que pasa si se quita la proteccion. REACTIVAR siempre
+despues de la demo. Si rompes algo, haz git checkout -- <archivo>.
+
+Archivos verificados contra el repo: public/api/notes_*.php, save_notes.php,
+save_progress.php, reset_level.php, validate_step.php, public/notes.php,
+public/admin/notes.php, src/Controllers/AuthController.php, src/Security/Sesion.php,
+src/Security/Csrf.php, src/Models/NotesModel.php, public/levels/level1.php.
+
+------------------------------------------------------------------------------
+1. SECRETO FUERA DEL CODIGO (.env + RuntimeException)
+------------------------------------------------------------------------------
+Que protege: que la clave de Mongo (MONGODB_URI) no quede escrita en el codigo
+ni en Git. Si falta, la app falla rapido con mensaje claro, no a medias.
+Donde esta:
+  config/database.php:14-25 (carga .env con phpdotenv o config/env.php, lee
+  getenv('MONGODB_URI'), si vacia lanza RuntimeException 'MONGODB_URI no configurada...').
+  .env.example = plantilla (sin secretos reales). .env real esta en .gitignore.
+Toggle SOLO-DEMO (advertencia: REACTIVAR, no subir secretos a Git):
+  Efecto observable: comentar las lineas 20-25 (el if que lanza RuntimeException)
+  y poner una URI quemada temporal: la app arranca sin .env pero el secreto
+  queda visible en codigo (malo). Para demo: renombra .env a .env.bak y recarga
+  login.php -> veras el error RuntimeException en logs. Revertir: renombra de
+  vuelta y descomenta el if. Comando revertir: git checkout -- config/database.php.
+
+------------------------------------------------------------------------------
+2. HASH DE CLAVES (password_hash + limite 72)
+------------------------------------------------------------------------------
+Que protege: las claves nunca se guardan legibles. password_hash pone sal
+automatica y costo adaptativo; password_verify compara en tiempo constante.
+El limite 72 evita el truncamiento silencioso de bcrypt (PASSWORD_DEFAULT):
+si aceptaras 100 caracteres, los ultimos 28 se ignorarian sin avisar.
+Donde esta:
+  src/Controllers/AuthController.php:268 (register: password_hash($password, PASSWORD_DEFAULT)),
+  :335 (login: password_verify($password, $user['password_hash'])),
+  :249-252 (rechazo si mb_strlen > 72 con mensaje 'MÁXIMO 72 CARACTERES'),
+  :242 (politica 8+ con letra y numero), :255-263 (correo duplicado responde
+  generico 'Credenciales inválidas.' para no enumerar).
+  scripts/crear_usuarios_demo.php:52 (seeder tambien usa password_hash).
+Toggle SOLO-DEMO:
+  Efecto observable: comentar el bloque :249-252 y registrar una clave de 80
+  caracteres -> el registro pasa pero el login con los ultimos caracteres
+  cambiados TAMBIEN pasa (prueba el truncamiento). Revertir: descomenta.
+  NUNCA cambiar a md5/sha1 ni aunque sea "para demo": rompe el login de todos.
+
+------------------------------------------------------------------------------
+3. SESIONES (1200s + HttpOnly + SameSite Strict + Secure auto + rotate + timeout)
+------------------------------------------------------------------------------
+Que protege:
+  - 1200s (20 min): si abandonas el PC, la sesion muere sola.
+  - HttpOnly: JavaScript no puede leer la cookie (frena robo por XSS).
+  - SameSite Strict: el navegador no envia la cookie desde webs externas (frena CSRF).
+  - Secure auto: en HTTPS la cookie solo viaja cifrada (en localhost HTTP no se activa).
+  - regenerate (rotate ID): tras login/register el ID cambia (frena fijacion de sesion).
+  - enforceTimeout: cada request actualiza last_activity; si pasa 1200s, destroy.
+Donde esta:
+  src/Security/Sesion.php:14 (LIFETIME=1200), :22-28 (cookie params),
+  :34-49 (enforceTimeout), :51-56 (regenerate), :58-78 (destroy + borra cookie),
+  :81-92 (isHttps con X-Forwarded-Proto).
+  src/Controllers/AuthController.php:51-57 (bootSession llama start+timeout+Csrf),
+  :281 y :340 (regenerate tras register/login), :346 last_activity, :348 rotateCsrf.
+Toggle SOLO-DEMO (uno a la vez):
+  a) Timeout: cambia LIFETIME a 10 (segundos) en Sesion.php:14 -> logueate,
+     espera 15s, recarga -> te saca a login. Observable inmediato. Revertir a 1200.
+  b) HttpOnly: cambia 'httponly'=>true a false en Sesion.php:27 -> en consola
+     document.cookie ya muestra PHPSESSID (antes no). Revertir a true.
+  c) SameSite: cambia 'Strict' a 'None' en Sesion.php:27 -> la cookie viajaria
+     en peticiones externas (no demostrable sin atacante, solo ensena el codigo).
+     Revertir a 'Strict'. Nota: docs academicos piden Lax; Strict es mas duro y vale.
+  d) Regenerate: comenta Sesion::regenerate() en AuthController.php:340 ->
+     el PHPSESSID antes/desde login es EL MISMO (mira Application > Cookies).
+     Revertir: descomenta.
+
+------------------------------------------------------------------------------
+4. CSRF (token en cuerpo o cabecera + rotate, nunca en query)
+------------------------------------------------------------------------------
+Que protege: que una web maliciosa no pueda hacer POST/PUT/DELETE en tu nombre
+aprovechando tu cookie (el atacante no conoce tu token aleatorio).
+Donde esta:
+  src/Security/Csrf.php:13-18 (ensure crea bin2hex(random_bytes(32))),
+  :25-31 (validate con hash_equals), :33-36 (rotate).
+  src/Controllers/AuthController.php:133-142 (validateCsrf acepta cuerpo o
+  cabecera X-CSRF-Token), :144-147 (rotateCsrf), :288 y :348 (rotate tras
+  register/login), :364-370 (rotate tras logout).
+  Endpoints: public/api/notes_create.php:53-56, notes_update.php:51-54,
+  notes_delete.php:47-54 (solo cuerpo o header, nunca query), save_notes.php:56-59,
+  save_progress.php:36-39, reset_level.php:57-60, validate_step.php:62-67.
+  Puente a JS: public/levels/level1.php:41-44 (window.NIXON.csrfToken con escape HEX).
+Toggle SOLO-DEMO:
+  Comenta UNA linea concreta, ej. en save_progress.php:36-39 el if validateCsrf,
+  o cambia a "if (false && ...)" -> los curl de T08 paso 1 (sin token) pasan de
+  403 a 200. Observable: sin token igual guarda progreso. Revertir: descomenta.
+  Alternativa sin tocar codigo: demuestra el fallo/ok con T08 pasos 1 vs 4
+  (recomendado: no tocas nada y se ve el 403 vs 200).
+
+------------------------------------------------------------------------------
+5. RBAC + OWNERSHIP (roles + filtro {_id, user_id})
+------------------------------------------------------------------------------
+Que protege: que un jugador no lea/borre/edite notas de otro (IDOR) ni entre
+al panel GM, y que el admin si pueda ayudar sin saltarse auth/CSRF.
+Donde esta:
+  Roles: src/Controllers/AuthController.php:37-38 (ALLOWED_ROLES admin/jugador,
+  DEFAULT_ROLE jugador), :180-189 (getRole/isAdmin), :191-201 (requireRole 403),
+  :380-399 y :416-432 (saveProgress/getProgress con rama admin-ajena user_id).
+  Ownership jugador: src/Models/NotesModel.php:164-179 (getNote), :225-284
+  (updateNote filtro {_id,user_id}), :289-318 (deleteNote filtro {_id,user_id}),
+  :135 (listNotes filtra user_id+level).
+  Puerta IDOR: NotesModel.php:200-219 (obtenerNotaSegura: admin->findOne({_id}),
+  jugador->findOne({_id,user_id})), usada en notes_get.php:66, notes_update.php:115,
+  notes_delete.php:97. Distincion 403/404 con getNoteAny en notes_get.php:67-72.
+  Solo-admin: NotesModel.php:395-571 (listNotesAny/getNoteAny/updateNoteAny/
+  deleteNoteAny SIN filtro user_id), llamados solo desde
+  src/Controllers/AdminNotesController.php (dashboard/search/update/delete con
+  denyIfNotAdmin :307-347 + requireRole). Rama user_id ajeno en cada API jugador
+  (ej. notes_create.php:83-92, notes_update.php:86-97, notes_delete.php:68-79,
+  save_notes.php:94-103, save_progress.php:63-73, reset_level.php:75-86):
+  si no eres admin -> 403 ACCESO DENEGADO.
+Toggle SOLO-DEMO:
+  Opcion segura (recomendada): logueate como admin y muestra que el MISMO id
+  da 200 (admin) vs 403 (jugador B). No tocas codigo.
+  Opcion codigo (riesgosa, avisa al jurado): en NotesModel.php:211-213 comenta
+  el if ($rolUsuario!=='admin') que agrega user_id al filtro -> todos ven todo
+  (403 desaparecen, todo 200). Observable inmediato en T03 paso 1. Revertir:
+  descomenta (git checkout -- src/Models/NotesModel.php). SOLO-DEMO, REACTIVAR.
+
+------------------------------------------------------------------------------
+6. RATE-LIMIT (5 fallos -> 60s x bloqueos, invisible)
+------------------------------------------------------------------------------
+Que protege: frena fuerza bruta de claves sin decirle al atacante que esta
+bloqueado (ni si el correo existe). Vive en $_SESSION (sin base de datos).
+Donde esta:
+  src/Controllers/AuthController.php:42-43 (MAX 5, BASE 60s), :82-94 (rateState),
+  :96-99 (isRateBlocked), :101-112 (recordAuthFailure: blocks++, blocked_until
+  = time+60*blocks), :114-117 (clearRateLimit tras exito), :218 y :309
+  (chequeo al inicio de register/login), :232-251 y :322-337 (cada fallo suma).
+Toggle SOLO-DEMO:
+  Cambia RATE_LIMIT_MAX_ATTEMPTS a 2 en AuthController.php:42 -> solo 2 fallos
+  y ya bloquea (demo rapida de T09 sin hacer 5). O comenta el if isRateBlocked
+  en :309 -> nunca bloquea (fuerza bruta ilimitada, malo). Observable: con 2,
+  el 3er intento con clave correcta sigue diciendo 'Credenciales inválidas.'.
+  Revertir a 5. SOLO-DEMO.
+
+------------------------------------------------------------------------------
+7. CSP + CABECERAS (Content-Security-Policy minima viable + nosniff + frame + referrer)
+------------------------------------------------------------------------------
+Que protege: CSP limita de donde puede venir JS/imagenes/estilos (frena XSS e
+inyeccion de scripts externos). nosniff evita que el navegador adivine tipos.
+SAMEORIGIN evita clickjacking (no te meten en un iframe ajeno). same-origin
+evita filtrar la URL a terceros. no-store evita cache de datos sensibles.
+Donde esta:
+  src/Controllers/AuthController.php:64-73 (sendSecurityHeaders: nosniff,
+  SAMEORIGIN, same-origin, CSP default-src 'self'; img 'self' data: blob:;
+  script 'self' unpkg.com cdnjs.cloudflare.com 'unsafe-inline' 'unsafe-eval';
+  style 'self' 'unsafe-inline'), llamada en bootSession :51-57 (todos los
+  endpoints la envian). no-store en cada API: ej. notes_get.php:26,
+  notes_list.php:20, save_progress.php:9, validate_step.php:26, etc.
+Toggle SOLO-DEMO:
+  Comenta la linea 72 (la de CSP) en AuthController.php -> recarga y en
+  Network > Headers ya no aparece Content-Security-Policy, pero el juego
+  sigue funcionando (Phaser necesita unsafe-eval + cdnjs; quitar solo la
+  linea entera lo deja sin proteccion pero jugable). Para demo de XSS:
+  muestra que con CSP un <script src="https://evil.com/x.js"> se bloquea
+  (error en Consola), sin CSP cargaria. Revertir: descomenta. SOLO-DEMO.
+
+------------------------------------------------------------------------------
+8. ALLOW + 405 (contrato de metodo exacto por endpoint)
+------------------------------------------------------------------------------
+Que protege: cada endpoint solo acepta su verbo; un GET no puede borrar ni
+un POST leer. El header Allow dice al cliente que verbo usar. Evita CSRF por
+GET y acciones accidentales (ej. un <img src="...delete?id=X"> no borra porque
+delete exige POST/DELETE con JSON+CSRF, no GET con query).
+Donde esta (11 puntos auditados):
+  notes_create.php:42-45 (Allow: POST), notes_get.php:49-52 (Allow: GET),
+  notes_list.php:41-44 (Allow: GET), notes_search.php:34-44 (Allow: GET, con
+  rama HTMX 200 parcial), notes_update.php:36-43 (Allow: PUT, PATCH — jugador),
+  notes_delete.php:37-40 (Allow: POST, DELETE), save_notes.php:45-48 (Allow: POST),
+  save_progress.php:25-28 (Allow: POST), reset_level.php:46-49 (Allow: POST),
+  validate_step.php:50-53 (Allow: POST), AdminNotesController.php:184-195
+  (GM update Allow: POST, PUT, PATCH) y :250-258 (GM delete Allow: POST, DELETE).
+  Divergencia intencional: GM acepta POST por formularios, jugador update NO
+  (ver comentario notes_update.php:37-41).
+Toggle SOLO-DEMO:
+  Comenta el bloque if METHOD en un endpoint, ej. notes_delete.php:37-40 ->
+  un GET a delete ya no da 405 (sigue pidiendo CSRF/id en cuerpo, asi que no
+  borra nada, pero el contrato se rompe y el test T07 falla). Observable:
+  curl -i -b jar "$BASE/api/notes_delete.php" ya no trae Allow. Revertir:
+  descomenta. SOLO-DEMO. No cambiar Allow sin cambiar el if (mienten distinto).
+
+------------------------------------------------------------------------------
+9. GATES DE JUEGO (auth + orden servidor + flags one-time + reset real POST)
+------------------------------------------------------------------------------
+Que protege: no se puede saltar niveles escribiendo la URL, ni avanzar pasos
+fuera de orden, ni revivir progreso tras perder recargando la pagina.
+Donde esta:
+  public/levels/level1.php:10 (requireAuth a ../login.php), :17-21 (?reset=1
+  solo limpia sesion + 303, NO borra Mongo).
+  public/api/validate_step.php:29 (STEP_ORDER Documento1..Cajafuerte, debe
+  coincidir con level1.js), :46-48 (401 sin auth), :73-100 (autoridad servidor:
+  level1_step en sesion, +1 por acierto, 20% cada uno, completed flag),
+  :89-91 (orden incorrecto no avanza).
+  public/api/save_progress.php:42-45 (level solo level1 allowlist), :75-95
+  (fusion conserva notes + espejo sesion), public/api/save_notes.php (solo al
+  ganar, onLevelComplete), public/api/reset_level.php:88-107 (al perder:
+  clearLevelNotes + progress {0,false,[]} + limpia sesion + flag gameover).
+Toggle SOLO-DEMO:
+  Comenta el requireAuth en level1.php:10 -> sin login igual ves el juego
+  (pero validate_step seguira dando 401, asi que no avanzas: buen observable
+  de defensa en profundidad). Revertir: descomenta. SOLO-DEMO.
+  Alternativa sin codigo: en T10 paso 4 haz clicks fuera de orden y muestra
+  ORDEN INCORRECTO sin avanzar el %.
+
+------------------------------------------------------------------------------
+10. NO-STORE (Cache-Control en todo JSON/HTMX)
+------------------------------------------------------------------------------
+Que protege: notas y progreso no quedan en cache del navegador ni en proxies
+(alguien con acceso al PC no los lee con "atras", ni un proxy los guarda).
+Donde esta: literalmente cada endpoint:
+  notes_get.php:26, notes_list.php:20, notes_create.php:22, notes_update.php:20,
+  notes_delete.php:21, notes_search.php:25/35 (+ Pragma/Vary en controlador),
+  save_notes.php:25, save_progress.php:9, reset_level.php:30, validate_step.php:26,
+  NotesController.php:145/162/197/228/240 (search/index + Vary: HX-Request),
+  AdminNotesController.php:145/162/187/253/323/333 (dashboard/search/update/delete).
+Toggle SOLO-DEMO:
+  Comenta UNA linea no-store, ej. notes_get.php:26 -> en Network > Headers de
+  notes_get ya no aparece Cache-Control: no-store (el cuerpo sigue igual, solo
+  cambia cacheabilidad). Observable debil pero visible en Headers. Revertir:
+  descomenta. SOLO-DEMO.
+
+------------------------------------------------------------------------------
+11. HEX (escape hexadecimal al inyectar token/CSRF a JS/HTML)
+------------------------------------------------------------------------------
+Que protege: al imprimir el token en HTML/JS, los caracteres < > & ' " se
+escapan como \x.. para que un token raramente rompa el <script> ni permita
+inyeccion HTML (defensa en profundidad junto a htmlspecialchars).
+Donde esta:
+  public/levels/level1.php:42 (json_encode con JSON_HEX_TAG|JSON_HEX_APOS|
+  JSON_HEX_AMP|JSON_HEX_QUOT para window.NIXON.csrfToken),
+  public/login.php:65 (hidden input con htmlspecialchars($csrfToken)),
+  vistas notes/admin con htmlspecialchars (escape en vista, nunca en modelo:
+  ver NotesModel.php:40-41 comentario dual-write guarda texto plano).
+Toggle SOLO-DEMO:
+  Quita los flags HEX en level1.php:42 dejando solo json_encode($csrfToken) ->
+  visualmente identico (el token es hex [0-9a-f], no contiene <>&), pero pierdes
+  la defensa si algun dia el token llevara esos chars. Observable: ninguno en
+  juego normal (esa es la gracia: es invisible hasta el ataque). Revertir:
+  restaura los 4 flags. SOLO-DEMO.
+
+------------------------------------------------------------------------------
+REGLA DE ORO PARA LA DEMO
+------------------------------------------------------------------------------
+Si desactivas algo para mostrar el "antes" (vulnerable), muestra INMEDIATAMENTE
+el "despues" (reactivado, 403/401/405 correctos). Di en voz alta: "esto es
+SOLO-DEMO, ya lo reactive". Al final verifica con: git status y git diff --stat
+(debe estar limpio o solo con los 3 .txt de docs/).

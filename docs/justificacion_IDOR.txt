@@ -1,0 +1,186 @@
+JUSTIFICACION IDOR — NiXon.fear (por que el filtro {_id, user_id} y el 403)
+================================================================================
+Lenguaje sencillo, paso a paso. Sin tocar codigo.
+Archivos reales: src/Models/NotesModel.php, public/api/notes_get.php,
+public/api/notes_update.php, public/api/notes_delete.php, public/notes.php,
+public/admin/notes.php, src/Controllers/AuthController.php.
+
+------------------------------------------------------------------------------
+1. QUE ES IDOR (con ejemplo del juego)
+------------------------------------------------------------------------------
+IDOR = Insecure Direct Object Reference (Referencia Directa Insegura a Objeto).
+En simple: el juego te da un "numero de nota" (el _id, 24 letras/numeros hex,
+ej. 671f9a2c4b5d6e7f8090a1b2) y confia en que solo pediras TUS numeros.
+El ataque: el Jugador 1 abre la consola (F12) o cambia la URL y pone el numero
+de una nota del Jugador 2. Sin proteccion, el servidor la devuelve/borra igual,
+porque solo miro el _id y no pregunto "¿de quien es?".
+
+Ejemplo concreto en NiXon.fear:
+  - Jugador 1 (player_nixon) crea nota -> id ID_1 (suya).
+  - Jugador 2 (player2) crea nota -> id ID_2 (suya, secreta: "pista del safe").
+  - Jugador 1 adivina o copia ID_2 (lo vio en un screenshot, en el historial,
+    o lo fuerzo secuencialmente) y pide:
+      GET /api/notes_get.php?id=ID_2
+    o peor:
+      DELETE /api/notes_delete.php con {"id":"ID_2"}
+  Sin proteccion: lee la pista ajena (trampa) o borra el archivero del rival
+  (sabotaje de progresion). Con proteccion: 403 ACCESO DENEGADO y la nota ajena
+  ni se muestra ni se borra.
+
+------------------------------------------------------------------------------
+2. DEMOSTRACION PASO A PASO (curl + consola fetch con credenciales)
+------------------------------------------------------------------------------
+Prepara (ver docs/pruebas_demostracion_seguridad.txt 0.4):
+  BASE=http://localhost:8080
+  jarA.txt = sesion Jugador 1 (player_nixon@nixon.fear / Player123!)
+  jarB.txt = sesion Jugador 2 (player2 / Player123!)
+  TOKEN_A, TOKEN_B = cada uno su window.NIXON.csrfToken o hidden input.
+  ID_A = nota creada por A (201 devuelve {"id":"..."}).
+  ID_B = nota creada por B.
+
+2.1 Ataque de LECTURA (B roba a A) — curl:
+  Paso 1 (ataque, debe fallar con 403):
+    curl -b jarB.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  Paso 2 (legitimo, debe pasar con 200):
+    curl -b jarA.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  Paso 3 (inexistente, debe dar 404 distinto del 403):
+    curl -b jarB.txt "$BASE/api/notes_get.php?id=000000000000000000000000" -i
+  Donde mirar: terminal muestra Status + cuerpo. En navegador, F12 > Network >
+  notes_get.php > Preview.
+
+2.2 Ataque de LECTURA — consola fetch (mas visual para el jurado):
+  Paso 1: logueate como Jugador B en el navegador, abre F12 > Consola, pega
+  (cambia ID_A por el real):
+    fetch("/api/notes_get.php?id=ID_A", {credentials:"include"}).then(r=>r.text().then(t=>console.log("STATUS",r.status,"CUERPO",t)))
+  Paso 2: logueate como Jugador A en otra ventana/privado, pega lo mismo.
+  Paso 3: con A, pide un ID inventado:
+    fetch("/api/notes_get.php?id=000000000000000000000000", {credentials:"include"}).then(r=>r.text().then(t=>console.log("STATUS",r.status,"CUERPO",t)))
+
+2.3 Ataque de BORRADO/EDICION (B sabotea a A) — curl:
+  Paso 1 (borrado ajeno, debe fallar 403):
+    curl -b jarB.txt -X DELETE "$BASE/api/notes_delete.php" -H "Content-Type: application/json" -d '{"id":"ID_A","csrf_token":"TOKEN_B"}' -i
+  Paso 2 (edicion ajena, debe fallar 403):
+    curl -b jarB.txt -X PUT "$BASE/api/notes_update.php" -H "Content-Type: application/json" -d '{"id":"ID_A","note_text":"hackeada","csrf_token":"TOKEN_B"}' -i
+    Ojo: update jugador SOLO acepta PUT/PATCH (ver public/api/notes_update.php:36-43).
+    Si mandas POST veras 405 Allow: PUT, PATCH (eso es T07, no IDOR).
+  Paso 3 (prueba de que la nota sobrevivio):
+    curl -b jarA.txt "$BASE/api/notes_get.php?id=ID_A" -i
+
+2.4 Contraste ADMIN (el GM si puede, con auditoria):
+  Paso 1: logueate como admin_nixon@nixon.fear / Admin123!, ve a
+  $BASE/admin/notes.php (ver public/admin/notes.php:1).
+  Paso 2:
+    curl -b jarAdmin.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  Mira la bitacora del dashboard: hay evento admin.notes.dashboard = ok.
+
+------------------------------------------------------------------------------
+3. QUE SE ESPERA (403 vs 200 propio vs 404 inexistente — cuerpos exactos)
+------------------------------------------------------------------------------
+Lectura ajena (B lee A):
+  HTTP 403
+  {"status":"error","message":"ACCESO DENEGADO."}
+  Codigo: public/api/notes_get.php:67-70.
+
+Lectura propia (A lee A) o admin lee cualquiera:
+  HTTP 200
+  {"status":"success","message":"NOTA RECUPERADA.","note":{"id":"...","user_id":"...","level":"level1",...}}
+  Codigo: public/api/notes_get.php:74.
+
+ID inexistente (24 hex valido pero nadie lo tiene):
+  HTTP 404
+  {"status":"error","message":"NOTA NO ENCONTRADA."}
+  Codigo: public/api/notes_get.php:71.
+
+ID malformado (no son 24 hex):
+  HTTP 400
+  {"status":"error","message":"IDENTIFICADOR INVÁLIDO."}
+  Codigo: public/api/notes_get.php:54-57.
+
+Borrado/edicion ajena:
+  HTTP 403 {"status":"error","message":"ACCESO DENEGADO."}
+  Codigo: public/api/notes_delete.php:97-103, public/api/notes_update.php:115-121.
+  Tras el 403, la nota sigue existiendo (verificacion paso 2.3.3 da 200).
+
+Sin login (para distinguir de IDOR):
+  HTTP 401 {"status":"error","message":"SESIÓN NO AUTORIZADA."}
+  (IDOR es 403 con login valido; sin login es 401. No confundir.)
+
+Sin CSRF (en mutantes):
+  HTTP 403 {"status":"error","message":"TOKEN DE SEGURIDAD INVÁLIDO."}
+  (mismo 403 pero distinto mensaje que ACCESO DENEGADO: uno es "quien eres /
+  token malo", el otro es "quien eres esta bien pero no es tuyo").
+
+------------------------------------------------------------------------------
+4. JUSTIFICACION TECNICA (por que asi y no de otra forma)
+------------------------------------------------------------------------------
+4.1 El filtro {_id, user_id} (y no solo _id):
+  El error clasico es buscar solo por _id:
+    findOne({_id: ID})  // MALO: devuelve la nota de cualquiera
+  Lo correcto para jugador (ver src/Models/NotesModel.php:245 en updateNote,
+  :297 en deleteNote, :171-174 en getNote, :135 en listNotes):
+    findOne({_id: ID, user_id: MI_ID})  // BUENO: solo si es mia
+  Localizar por _id NO autoriza. La relacion recurso<->dueno se valida en CADA
+  peticion, en el servidor, nunca en el cliente (ocultar el boton no protege).
+
+4.2 obtenerNotaSegura($idNota, $idUsuario, $rolUsuario):
+  Puerta unica IDOR (ver src/Models/NotesModel.php:200-219):
+    - Valida que ambos sean ObjectId 24hex (si no, null).
+    - Si rol es admin: findOne({_id}) — acceso global GM (soporte).
+    - Si rol es jugador: findOne({_id, user_id}) — solo propias.
+  La usan notes_get.php:66, notes_update.php:115, notes_delete.php:97.
+  Si devuelve null, el endpoint NO responde 404 directamente: distingue la
+  causa con getNoteAny($id) (ver NotesModel.php:455-469: findOne({_id}) sin
+  dueno, solo para distinguir, nunca para devolver datos al jugador):
+    si getNoteAny existe -> 403 ACCESO DENEGADO (es de otro).
+    si getNoteAny es null -> 404 NOTA NO ENCONTRADA (no existe).
+  Ver el patron repetido en notes_get.php:67-72, notes_update.php:116-121,
+  notes_delete.php:98-103.
+
+4.3 *Any solo admin (y nunca sin auth/CSRF):
+  listNotesAny / getNoteAny / updateNoteAny / deleteNoteAny
+  (ver src/Models/NotesModel.php:395-571) saltan el filtro user_id, pero:
+    - Solo las llama AdminNotesController (ver src/Controllers/AdminNotesController.php)
+      despues de denyIfNotAdmin + requireRole('admin') (ver :307-347, :180-181, :246).
+    - El jugador que manda user_id ajeno en el cuerpo cae en 403 antes de
+      tocar el modelo (ver notes_create.php:83-92, notes_update.php:86-97,
+      notes_delete.php:68-79, save_notes.php:94-103, save_progress.php:63-73).
+    - El admin TAMBIEN pasa auth + CSRF (ver AdminNotesController.php:197-202
+      update y :266-269 delete). Ser admin no exime del token.
+    - validate_step.php NO tiene rama user_id ni siquiera para admin
+      (ver comentario :15-18): el progreso de juego siempre es el de tu sesion.
+
+4.4 Por que el 403 no revela existencia (matiz para el jurado):
+  Pregunta tipica: "si el 403 dice que existe y el 404 que no, ¿no estan
+  revelando existencia?". Respuesta honesta en dos partes:
+    a) El atacante YA conoce el ID que prueba (lo copio/adivino); el 403 no le
+       regala IDs nuevos, solo le confirma ese uno. No hay listado ajeno:
+       listNotes siempre filtra por su user_id (NotesModel.php:135), asi que
+       no puede enumerar.
+    b) La alternativa (devolver 404 siempre, incluso si existe ajena) ocultaria
+       existencia pero confundiria al dueno legitimo y al admin en depuracion.
+       El proyecto elige 403 honesto para ajena + 404 para inexistente, que es
+       el estandar (igual que RBAC del panel GM: jugador a admin/notes.php
+       recibe 403, no 404). Lo que NUNCA se devuelve al jugador ajeno es el
+       CONTENIDO de la nota (el 403 no incluye campo note).
+  Campo real: el exigido como propietario_id en docs es user_id (ObjectId ref
+  users._id). No se renombra: rompería coleccion, indices y dual-write
+  (ver NotesModel.php:186-189 y docs/mapeo_tecnico_parcial2.md §2).
+
+------------------------------------------------------------------------------
+5. QUE PROTEGE DE LA PROGRESION (por que importa para el juego)
+------------------------------------------------------------------------------
+Sin IDOR, un rival podria:
+  - Leer tus pistas_safe/terminal/documentos/libreta (trampa: avanza sin jugar).
+  - Sobrescribir tu note_text con basura (te deja pistas falsas).
+  - Borrar tus 20 notas del archivero (pierdes el espejo users.progress.<level>.notes
+    que lee onLevelComplete/save_notes.php, ver NotesModel.php:582-613 syncProgressArray).
+  - Con la rama user_id, guardar progreso/reset en TU cuenta (save_progress.php
+    y reset_level.php tambien exigen admin para user_id ajeno).
+Con IDOR, cada jugador solo muta su rama (user_id + level + note_text unico,
+ver indice NotesModel.php:352) y el GM conserva poder de ayuda via *Any con
+auditoria (AuditLog best-effort, sin passwords/tokens). El juego Phaser no se
+rompe: el dual-write resincroniza el espejo del dueno real tras cada CRUD.
+Frase de cierre para el jurado: "localizar por _id no autoriza; el filtro
+{_id, user_id} en cada operacion, con obtenerNotaSegura como puerta unica y
+*Any reservado al admin con auth+CSRF, es lo que convierte un ID adivinable en
+un recurso no accesible".

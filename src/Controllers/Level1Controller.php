@@ -24,12 +24,15 @@ final class Level1Controller
     public function handleRequest(array $post): void
     {
         header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
 
         if (!$this->auth->isAuthenticated()) {
             $this->respond(false, 'SESIÓN NO AUTORIZADA.', 401);
         }
 
-        if (!$this->auth->validateCsrf($post['csrf_token'] ?? null)) {
+        // Acepta token por campo o cabecera X-CSRF-Token (clientes fetch/JSON).
+        $csrf = $post['csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null);
+        if (!$this->auth->validateCsrf(is_string($csrf) ? $csrf : null)) {
             $this->respond(false, 'TOKEN DE SEGURIDAD INVÁLIDO.', 403);
         }
 

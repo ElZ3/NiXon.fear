@@ -1,0 +1,1 @@
+<?php declare(strict_types=1); require_once __DIR__.'/../src/Controllers/NotesController.php'; (new \App\Controllers\NotesController())->index();

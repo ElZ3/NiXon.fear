@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/env.php';
 
 class Database {
     private static $client = null;
@@ -7,8 +8,21 @@ class Database {
 
     public static function getConnection() {
         if (self::$db === null) {
-            // Modifica esta cadena con tus credenciales reales
-            $uri = "mongodb+srv://admin_NiXon:NiXon123!@nixonfear.fvwsnmj.mongodb.net/?appName=NiXonFear";
+            // Carga .env solo como conveniencia local (vlucas/phpdotenv si
+            // está instalado, si no el loader mínimo de config/env.php).
+            // El entorno real siempre tiene prioridad y nunca se sobreescribe.
+            if (class_exists(\Dotenv\Dotenv::class)) {
+                \Dotenv\Dotenv::createImmutable(__DIR__ . '/..')->safeLoad();
+            } else {
+                loadEnv(__DIR__ . '/..');
+            }
+            $uri = getenv('MONGODB_URI');
+            if ($uri === false || trim($uri) === '') {
+                throw new \RuntimeException(
+                    'MONGODB_URI no configurada. Define la variable de entorno ' .
+                    'MONGODB_URI o crea un archivo .env (ver .env.example).'
+                );
+            }
             self::$client = new MongoDB\Client($uri);
             self::$db = self::$client->selectDatabase('nixon_fear_db');
         }

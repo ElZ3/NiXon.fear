@@ -1,0 +1,247 @@
+GUIA DE PREPARACION — PARCIAL II NiXon.fear (estudio personal)
+============================================================
+Base: docs/evaluacion_parcial_nixon.md, docs/mapeo_tecnico_parcial2.md, auditors/.
+
+================================================================
+1. CONCEPTOS CLAVE (tecnico pero digerible)
+================================================================
+
+1.1 HASH DE PASSWORDS — password_hash / password_verify
+- Solo password_hash($pass, PASSWORD_DEFAULT) y password_verify().
+  Prohibido SHA/MD5 casero. Ver scripts/crear_usuarios_demo.php:52 y
+  src/Controllers/AuthController.php (login/register).
+- maxlength 72 en password: bcrypt trunca a 72 bytes. Si aceptas mas,
+  "secreto_largo...X" == "secreto_largo...Y" y el usuario cree tener mas
+  entropia de la real. Fix: rechazar len>72 o migrar a ARGON2ID.
+  Auditoria: auditors/auditoria_nivel1_fase-pulido-critico_2026-10-04.md.
+- Defender: "hash adaptativo con sal automatica; verify de tiempo
+  constante; limite 72 documenta el truncamiento de bcrypt".
+
+1.2 SESIONES — src/Security/Sesion.php (App\Security)
+- LIFETIME=1200 (20 min inactividad). enforceTimeout(): si
+  now-last_activity>1200 -> destroy()+reboot de sesion.
+- Cookie: lifetime 1200, path /, httponly=true, samesite=Strict,
+  secure=auto via isHttps() (HTTPS o X-Forwarded-Proto=https o puerto
+  443 — necesario detras de proxy TLS).
+- Nota: docs academicos piden SameSite Lax; el codigo real usa Strict
+  (mas restrictivo = cumple y supera). Decir esto en defensa.
+- regenerate_id: session_regenerate_id(true) tras login/register
+  exitoso (elimina ID anonimo previo, anti-fijacion).
+- destroy+reboot: destroy() vacia $_SESSION, borra cookie (-42000) y
+  session_destroy(); enforceTimeout reabre sesion limpia.
+- Defender: archivo:linea Sesion.php:14,22-32,34-49,51-56,58-78,81-92.
+
+1.3 CSRF — src/Security/Csrf.php
+- Token por sesion: ensure() crea bin2hex(random_bytes(32)) solo si
+  vacio; get() lo expone; validate() exige hash_equals(stored, dado);
+  rotate() genera uno nuevo.
+- Aceptado en cuerpo (csrf_token) o header X-CSRF-Token (fetch JSON),
+  NUNCA en query string (quedaria en logs/historial).
+  Ver AuthController.php:133-142 validateCsrf().
+- rotate en login/register/logout (tras exito). Logout es POST+CSRF:
+  GET -> 405, token malo -> 403.
+- HEX: token inyectado a JS con escape hexadecimal (auditoria: fallo
+  leve HEX cerrado). Defender: "hash_equals evita timing attack;
+  query-string prohibido por fuga en logs".
+
+1.4 RBAC — roles admin / jugador
+- Roles: AuthController ALLOWED_ROLES=['admin','jugador'],
+  DEFAULT_ROLE='jugador'. Seeder CLI crea admin_nixon/player_nixon;
+  rol ausente migra a jugador.
+- NotesModel: metodos con ownership solo dueno (get/update/delete con
+  filtro {_id,user_id}); variantes *Any (listNotesAny, getNoteAny,
+  updateNoteAny, deleteNoteAny) SOLO admin, llamadas desde
+  AdminNotesController con requireRole('admin').
+- Dashboard GM deny-first: entry admin/notes.php y views/admin/
+  verifican rol ANTES de renderizar; jugador -> 403 + AuditLog.
+- Servidor es unica autoridad: ocultar botones no autoriza.
+  Defender con matriz RBAC del doc de evaluacion §5.
+
+1.5 IDOR Y PREVENCION
+- Ataque: GET /api/notes_get.php?id=<ObjectId ajeno> para leer/borrar
+  progreso de otro jugador.
+- Regla: localizar por _id NO autoriza. Filtro obligatorio {_id,user_id}
+  para jugador; admin usa solo {_id}.
+- obtenerNotaSegura($idNota,$idUsuario,$rolUsuario) en
+  src/Models/NotesModel.php:200: valida ObjectIds; admin->findOne({_id});
+  jugador->findOne({_id,user_id}). Campo real user_id (ObjectId ref
+  users._id); equivale al propietario_id exigido en docs (ver
+  docs/mapeo_tecnico_parcial2.md §2 — NO renombrar, romperia coleccion,
+  indices y dual-write).
+- 403 vs 404: null de obtenerNotaSegura + getNoteAny() distingue:
+  existe con otro dueno -> 403 ACCESO DENEGADO; no existe -> 404.
+  Defender: "403 no filtra existencia mas alla del ID ya conocido;
+  el 404 es para ID inexistente".
+
+1.6 RATE-LIMIT — AuthController.php:40-117
+- En $_SESSION (sin persistencia): 5 fallos -> bloqueo 60s x n_bloqueos
+  (blocks++, blocked_until=time+60*blocks, count=0).
+- Aplica a login y register (scopes separados). Exito -> clearRateLimit.
+- Mensaje SIEMPRE generico "Credenciales invalidas." aunque este
+  bloqueado: no revelar si el correo existe ni el estado del bloqueo
+  (anti-enumeracion). Defender: "backoff lineal 60s*n, invisible".
+
+1.7 CSP — AuthController.php:64-73 sendSecurityHeaders()
+- CSP: default-src 'self'; img-src 'self' data: blob:;
+  script-src 'self' unpkg.com cdnjs.cloudflare.com 'unsafe-inline'
+  'unsafe-eval'; style-src 'self' 'unsafe-inline'.
+- Por que: data:/blob: para sprites/canvas del juego; unsafe-eval
+  exigido por Phaser 3 (cdnjs); unsafe-inline por scripts en linea de
+  niveles + HTMX unpkg. Compromiso documentado: CSP minima viable sin
+  romper el juego. Mas X-Content-Type-Options nosniff, X-Frame-Options
+  SAMEORIGIN, Referrer-Policy same-origin, no-store global en JSON.
+
+================================================================
+2. GUIA DE EJECUCION DE PRUEBAS T01-T10 (paso a paso)
+================================================================
+Requisito previo (operador): MONGODB_URI en entorno/.env, APP_SALT
+rotado, servidor con DocumentRoot en public/ (php -S localhost:8000 -t
+public). Dos cuentas: admin_nixon y player_nixon (+ segundo jugador
+para IDOR). DevTools abierto: Network (Status, Headers: Allow,
+Location, HX-Redirect, cuerpo) + Application/Cookies (PHPSESSID:
+HttpOnly, Secure, SameSite).
+
+-- T01 LOGIN VALIDO (302 + regenerate) --
+1. GET login.php -> 200, guarda csrf_token (ver fuente, input hidden).
+2. POST login (form o curl):
+   curl -i -c jar.txt -b jar.txt -d "email=player_nixon@...&password=...&csrf_token=TOKEN" http://localhost:8000/login.php
+3. Esperado: 302 Location a notes/welcome/panel; Set-Cookie PHPSESSID
+   NUEVO (comparar antes/despues = regenerate_id); CSRF rotado.
+   Network: Status 302, Response Headers Location. Cookies: nuevo ID.
+
+-- T02 LOGIN INVALIDO / ANTI-ENUMERACION --
+1. POST con correo inexistente + clave cualquiera; luego correo real +
+   clave mala. Mismo comando que T01 cambiando campos.
+2. Esperado AMBOS: 200 (o 401 segun endpoint) con texto EXACTO
+   "Credenciales invalidas." — identico en los dos casos. No debe
+   decir "usuario no existe" ni "clave incorrecta".
+3. Repetir 6 veces seguidas: el 6o sigue diciendo lo mismo (bloqueo
+   invisible por rate-limit). Verificar que NO hay pista diferencial.
+
+-- T03 IDOR LECTURA (403 ajena / 200 propia / 404 inexistente) --
+1. Como jugador A, crea nota -> anota id_propia (respuesta 201 {id}).
+2. Como jugador B (otra jar), pide:
+   curl -b jarB.txt "http://localhost:8000/api/notes_get.php?id=ID_A"
+   -> 403 ACCESO DENEGADO.
+3. Con jar A el mismo id -> 200 con note.
+4. ID inexistente valido (ObjectId aleatorio de 24 hex):
+   -> 404. ID malformado -> 400.
+5. Network: Status + cuerpo JSON {status,message}. Clave: 403!=404.
+
+-- T04 IDOR BORRADO/EDICION AJENA (403) --
+1. Jugador B intenta borrar nota de A:
+   curl -b jarB.txt -d "id=ID_A&csrf_token=TOKEN_B" -H "X-CSRF-Token: TOKEN_B" http://localhost:8000/api/notes_delete.php
+   -> 403. Sin CSRF valido -> tambien 403 (pero motivo csrf).
+2. Con CSRF valido + id ajeno -> 403 por ownership. Verificar que la
+   nota de A sigue existiendo (GET con jar A -> 200).
+
+-- T05 ADMIN (200 global) --
+1. Login admin_nixon -> GET admin/notes.php -> 200 dashboard GM.
+2. GET api/admin_notes_search.php (o notes_get con id ajeno) como admin
+   -> 200 con datos de otros jugadores. Filtros correo/nivel/categoria
+   con delay 400ms devuelven parcial HTMX.
+3. Ver pestana bitacora: entradas audit_log (fecha desc).
+
+-- T06 AUTH REQUERIDA (302 pagina / 401-403 API) --
+1. Sin cookie: GET notes.php (pagina) -> 302 Location login.php.
+2. Sin cookie: GET api/notes_get.php -> 401 (o 403 segun endpoint)
+   JSON error; HTMX ademas header HX-Redirect al login.
+3. Network: pagina = Location; API = cuerpo JSON + HX-Redirect.
+
+-- T07 CONTRATO 405 + Allow --
+1. Metodo indebido en cada endpoint, ej:
+   curl -i -b jar.txt http://localhost:8000/api/notes_create.php   (GET a POST-only) -> 405 + Allow: POST
+   curl -i -X POST -b jar.txt "http://localhost:8000/api/notes_get.php?id=X"      -> 405 + Allow: GET
+   curl -i "http://localhost:8000/welcome.php?action=logout"                       -> 405 + Allow: POST (no cierra sesion)
+2. Verificar header Allow EXACTO en Response Headers (11 puntos 405
+   auditados). Logout solo POST+CSRF.
+
+-- T08 CSRF (403 sin/malo, 200 con bueno) --
+1. POST mutante sin token -> 403. Con token de otra sesion -> 403.
+2. Token por query ?csrf_token=... -> rechazado (403/400): nunca query.
+3. Formulario (cuerpo) y fetch (header X-CSRF-Token) con token propio
+   -> 200/201. Tras login/logout el token anterior ya no vale (rotate).
+
+-- T09 RATE-LIMIT INVISIBLE --
+1. 5 fallos login -> 6o intento (incluso con credenciales CORRECTAS
+   dentro de la ventana) sigue respondiendo generico/bloqueado sin
+   decir "bloqueado". Esperar 60s (o 60*n si reincide) y reintentar
+   -> vuelve a funcionar. Inspeccionar $_SESSION auth_rate solo en
+   servidor; el cliente no ve diferencia (anti-enumeracion).
+
+-- T10 REDIRECTS + GATES DE JUEGO --
+1. Sin auth: GET levels.php / level1 -> 302 login. Con auth jugador:
+   200 juego.
+2. Jugador pide admin/ -> 403 (deny-first) + evento en audit_log.
+3. Gates: completar nivel (flag complete one-time) / gameover ->
+   redireccion a levels.php (win/lose). E-only 4x4: interaccion solo
+   tecla E por borde (4x4), no click arbitrario. Verificar jugando o
+   inspeccionando validate_step (autoridad servidor).
+
+CHEQUEO RAPIDO EN DEVTOOLS:
+- Network: Status, Allow (T07), Location (T01/T06/T10), HX-Redirect
+  (API sin auth), cuerpo JSON {status,message} (T02/T03/T08).
+- Application > Cookies: PHPSESSID HttpOnly, SameSite=Strict,
+  Secure (solo HTTPS), cambio de valor tras login (T01).
+- loginHref: rama 405/unauthorized del wrapper API apunta al login
+  correcto ('../login.php' segun profundidad).
+
+================================================================
+3. EXPECTATIVAS DE DOMINIO (que explicar y defender)
+================================================================
+
+3.1 MONGO .env / RuntimeException (config/database.php:19-23)
+- Unico new MongoDB\Client; URI SOLO de getenv MONGODB_URI / .env
+  (phpdotenv o config/env.php que NO sobreescribe env) / .env.example
+  plantilla. Cero URI quemada en codigo. Ausente -> RuntimeException
+  con mensaje "define MONGODB_URI o crea .env". Defender: "secreto fuera
+  del codigo, falla rapido y explicito; pendiente operador rotar
+  admin_NiXon y purgar historial git".
+
+3.2 DUAL-WRITE progress (NotesModel syncProgressArray)
+- notes <-> users.progress embebido (lo lee Phaser): crear/editar/
+  borrar nota actualiza el array de progreso del nivel. Por eso NO se
+  renombra user_id ni users: renombrar rompe coleccion, indices y juego
+  (dictamen Act.2). Defender: "consistencia juego<->backoffice".
+
+3.3 HX-Request FRAGMENTO vs PAGINA (NotesController.php:36-47,94-198)
+- Con header HX-Request -> parcial HTML (_tabla_notas, <hx-partial>,
+  contador OOB en mismo request); sin header -> pagina completa o JSON
+  identico a notes_list. Vary: HX-Request. Misma seguridad en ambos.
+  Filtros AND q+level+category+sort+limit; typing 400ms
+  (hx-trigger keyup changed delay:400ms). Defender con demo de filtros.
+
+3.4 PUSH-URL AL PANEL (auditoria Act.2)
+- hx-get apunta al panel ($panelSelf, fallback basename), push-url=true
+  refleja ?q=... en barra (reproducible). Bug historico: pusheaba la API;
+  fix: hx-get al panel. Defender: "URL compartible sin exponer API".
+
+3.5 E-ONLY 4x4 POR BORDE
+- Interaccion de notas/inventario solo tecla E en zona de borde 4x4
+  (tile-based), sin clicks arbitrarios ni innerHTML en JS del juego.
+  Evita inyeccion/acciones fantasma. Defender: "input allowlist fisico".
+
+3.6 WIN/LOSE -> levels.php + GATES
+- Victoria (flag complete one-time) / derrota (gameover) redirigen a
+  levels.php; validate_step con autoridad servidor (no basta el cliente).
+  T10 los verifica junto a redirects de auth.
+
+3.7 DASHBOARD GM DENY-FIRST (AdminNotesController + entries)
+- requireRole('admin') ANTES de cualquier render/dato; jugador -> 403 +
+  AuditLog::registrar(denegado). Filtro correo en 2 pasos
+  (users por email -> notes por user_id). Corregir/eliminar usan *Any +
+  CSRF. Bitacora con fecha desc.
+
+3.8 AUDIT_LOG BEST-EFFORT (src/Models/AuditLog.php)
+- Coleccion audit_log {fecha,evento,resultado,actor,detalle}; indices
+  {fecha:-1},{evento,fecha},{actor.email}. Best-effort: try/catch que
+  nunca rompe la accion principal; sin secretos (nunca passwords/tokens).
+  Defender: "evidencia sin PII sensible, no bloquea el flujo".
+
+FRASES DE CIERRE PARA EL JURADO:
+- "app/ ≡ src/: no existe app/ ni autoload PSR-4; require_once a src/
+  con namespaces App\; crear app/ duplicaria clases (mapeo §1,§4)."
+- "propietario_id ≡ user_id, usuarios ≡ users: equivalencias
+  documentadas en mapeo §2-§3; renombrar romperia datos y juego."
+- "T01-T10 10/10 estaticos en codigo; runtime pendiente de operador
+  (Atlas+PHP) — comandos listos en seccion 2."

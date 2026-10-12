@@ -1,0 +1,10 @@
+# NiXon.fear — public/ es el DocumentRoot (Docker + php -S -t public).
+Options -Indexes
+
+# Bloquea lectura web de secretos en la raíz del proyecto.
+<Files ".env">
+  Require all denied
+</Files>
+<Files ".env.example">
+  Require all denied
+</Files>

@@ -2,3 +2,17 @@
 *.log
 .env
 .vscode/
+# Entregables regenerables (zips) y reportes internos: no esenciales para el juego
+/entregables/
+/auditors/
+# Logs locales de desarrollo
+/logs/
+# Archivos de sesión del editor Tiled (locales por usuario)
+/public/assets/maps/*.tiled-session
+# Sistema y temporales
+.DS_Store
+Thumbs.db
+*~
+*.tmp
+# MCP local con secretos (token GitHub): plantilla versionada aparte
+.opencode/mcp.json

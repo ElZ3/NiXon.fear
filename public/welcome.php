@@ -9,11 +9,21 @@ $auth = new AuthController();
 $auth->bootSession();
 $auth->requireAuth('login.php');
 
-// Cierre de sesión: se procesa aquí mismo (form del modal de confirmación).
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'logout') {
-    if ($auth->validateCsrf($_POST['csrf_token'] ?? null)) {
-        $auth->logout();
+// Cierre de sesión: SOLO POST + CSRF (form del modal de confirmación).
+// Un GET con ?action=logout se rechaza con 405 sin cerrar sesión.
+// Un POST con CSRF inválido se rechaza con 403 explícito, sin redirect.
+if (($_POST['action'] ?? '') === 'logout' || ($_GET['action'] ?? '') === 'logout') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        header('Allow: POST');
+        http_response_code(405);
+        exit('MÉTODO NO PERMITIDO.');
     }
+    $logoutCsrf = $_POST['csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null);
+    if (!$auth->validateCsrf(is_string($logoutCsrf) ? $logoutCsrf : null)) {
+        http_response_code(403);
+        exit('TOKEN DE SEGURIDAD INVÁLIDO.');
+    }
+    $auth->logout();
     header('Location: login.php');
     exit;
 }
@@ -22,6 +32,15 @@ $csrfToken = $auth->getCsrfToken();
 $email = $auth->getCurrentEmail();
 $progress = $auth->getProgress(); // ej. ['level1' => ['step' => 3, 'completed' => false]]
 $hasProgress = !empty($progress);
+// Tarea 4B — archivero de notas (una sola lectura arriba, sin duplicar consultas).
+$level1Notes = [];
+$level1NotesUpdated = null;
+if (isset($progress['level1']['notes']) && is_array($progress['level1']['notes'])) {
+    $level1Notes = array_values($progress['level1']['notes']);
+}
+if (isset($progress['level1']['notes_updated'])) {
+    $level1NotesUpdated = $progress['level1']['notes_updated'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -67,6 +86,11 @@ $hasProgress = !empty($progress);
               <span class="btn-subtext">=&gt; RECUPERAR PROGRESO DESDE LA BASE DE DATOS</span>
             </button>
 
+            <button type="button" class="win95-button" onclick="openModal('modal-notes')">
+              [ ARCHIVERO DE NOTAS ]
+              <span class="btn-subtext">=&gt; REVISAR NOTAS GUARDADAS DEL NIVEL 1</span>
+            </button>
+
             <button type="button" class="win95-button" onclick="openModal('modal-config')">
               [ CONFIGURAR ]
               <span class="btn-subtext">=&gt; AJUSTAR PARÁMETROS DEL TERMINAL</span>
@@ -106,6 +130,35 @@ $hasProgress = !empty($progress);
       <p class="terminal-subtext">CARACTERÍSTICA BETA — el perfil de agente aún está en construcción.</p>
       <div class="win95-modal-actions">
         <button type="button" class="win95-button" onclick="closeModal('modal-soon')">[ CERRAR ]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Archivero de notas (Tarea 4B, vista independiente win95) -->
+<div class="win95-modal-overlay" id="modal-notes">
+  <div class="win95-window win95-modal">
+    <div class="win95-titlebar">
+      <span>ARCHIVERO DE NOTAS // NIVEL 1</span>
+      <button type="button" class="win95-close-btn" onclick="closeModal('modal-notes')">X</button>
+    </div>
+    <div class="win95-body">
+      <?php if (!empty($level1Notes)): ?>
+        <p class="terminal-subtext">NOTAS RECUPERADAS: <?= count($level1Notes) ?></p>
+        <ul class="terminal-subtext" style="list-style:square; padding-left:20px;">
+          <?php foreach ($level1Notes as $note): ?>
+            <li><?= htmlspecialchars((string) $note, ENT_QUOTES, 'UTF-8') ?></li>
+          <?php endforeach; ?>
+        </ul>
+        <?php if ($level1NotesUpdated !== null && $level1NotesUpdated !== ''): ?>
+          <p class="terminal-ghost">ACTUALIZADO: <?= htmlspecialchars(is_array($level1NotesUpdated) ? json_encode($level1NotesUpdated) : (string) $level1NotesUpdated, ENT_QUOTES, 'UTF-8') ?></p>
+        <?php endif; ?>
+      <?php else: ?>
+        <p class="terminal-title" style="color:var(--terminal-yellow);">SIN DATOS</p>
+        <p class="terminal-subtext">El archivero está vacío. Complete el Nivel 1 para guardar notas.</p>
+      <?php endif; ?>
+      <div class="win95-modal-actions">
+        <button type="button" class="win95-button" onclick="closeModal('modal-notes')">[ CERRAR ]</button>
       </div>
     </div>
   </div>

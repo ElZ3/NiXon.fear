@@ -2,10 +2,16 @@
 declare(strict_types=1);
 
 /**
- * Sal fija del sistema. Sustituir por un valor propio y mantenerlo fuera
- * del control de versiones (variable de entorno, archivo de config, etc.).
+ * Sal fija del sistema. Se lee de la variable de entorno APP_SALT con
+ * fallback al valor histórico para no romper el juego en local sin env.
+ *
+ * TODO-ROTAR: el valor por defecto quedó expuesto en el historial de git.
+ * Definir APP_SALT en el entorno, rotar los hashes derivados que dependan
+ * de ella y purgar el historial (git filter-repo o BFG).
  */
-const APP_SALT = 'x7Q!vB92_r#Lm4Zs';
+if (!defined('APP_SALT')) {
+    define('APP_SALT', getenv('APP_SALT') ?: 'x7Q!vB92_r#Lm4Zs');
+}
 
 /**
  * Devuelve el SHA-256 de un string combinado con una sal.

@@ -13,7 +13,9 @@ declare(strict_types=1);
  *
  * El progreso vive en la sesión del servidor (autoridad de estado), no en
  * el cliente: level1.js solo informa qué objeto se clicó y refleja lo que
- * este controlador responde.
+ * este controlador responde. Por eso no acepta param user_id (ni siquiera
+ * admin): el admin también opera sobre su propia sesión, con auth + CSRF
+ * exigidos igualmente.
  */
 
 require_once __DIR__ . '/../../src/Controllers/AuthController.php';
@@ -21,6 +23,7 @@ require_once __DIR__ . '/../../src/Controllers/AuthController.php';
 use App\Controllers\AuthController;
 
 header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store, no-cache, must-revalidate');
 
 // Orden estricto — debe coincidir exactamente con PROGRESS_ORDER en level1.js.
 const STEP_ORDER = ['Documento1', 'Archivero', 'Documento 2', 'Computadora', 'Cajafuerte'];
@@ -45,6 +48,7 @@ if (!$auth->isAuthenticated()) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header('Allow: POST');
     respond('error', (int) round((($_SESSION['level1_step'] ?? 0) / count(STEP_ORDER)) * 100), 'MÉTODO NO PERMITIDO.', false, 405);
 }
 
@@ -55,10 +59,10 @@ if (!is_array($payload)) {
     $payload = $_POST; // compatibilidad con application/x-www-form-urlencoded
 }
 
-$csrfToken = $payload['csrf_token'] ?? null;
+$csrfToken = $payload['csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null);
 $step = trim((string) ($payload['step'] ?? ''));
 
-if (!$auth->validateCsrf($csrfToken)) {
+if (!$auth->validateCsrf(is_string($csrfToken) ? $csrfToken : null)) {
     respond('error', (int) round((($_SESSION['level1_step'] ?? 0) / count(STEP_ORDER)) * 100), 'TOKEN DE SEGURIDAD INVÁLIDO.', false, 403);
 }
 

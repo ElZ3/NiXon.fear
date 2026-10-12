@@ -9,10 +9,15 @@ $auth = new AuthController();
 $auth->bootSession();
 $auth->requireAuth('../login.php');
 
-// ?reset=1 reinicia explícitamente el progreso del nivel (usado por el
-// botón "REINTENTAR" de gameover.php).
+// ?reset=1 reinicia explícitamente el progreso del nivel en sesión
+// (compatibilidad con flujos antiguos). NOTA: el reset real con borrado
+// en Mongo (progreso 0/5 + deleteMany de notes por nivel) es el POST
+// ../api/reset_level.php, que llama triggerGameOver() antes de gameover.php.
+// No se expone un GET destructivo nuevo: aquí solo se limpia sesión.
 if (isset($_GET['reset'])) {
-    unset($_SESSION['level1_step'], $_SESSION['level1_completed']);
+    unset($_SESSION['level1_step'], $_SESSION['level1_completed'], $_SESSION['level_notes']);
+    header('Location: level1.php', true, 303);
+    exit;
 }
 
 $csrfToken = $auth->getCsrfToken();
@@ -34,7 +39,7 @@ $csrfToken = $auth->getCsrfToken();
     // Puente de datos servidor -> cliente. level1.js lee esto para
     // construir sus peticiones a la API sin exponer lógica de sesión.
     window.NIXON = {
-      csrfToken: <?= json_encode($csrfToken) ?>,
+      csrfToken: <?= json_encode($csrfToken, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>,
       apiEndpoint: '../api/validate_step.php'
     };
   </script>

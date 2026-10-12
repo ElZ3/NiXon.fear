@@ -1,0 +1,329 @@
+PRUEBAS DE DEMOSTRACION DE SEGURIDAD EN TIEMPO REAL — NiXon.fear (T01-T10)
+==============================================================================
+Lenguaje sencillo, paso a paso. No se toca codigo. Solo navegador + curl.
+BASE = http://localhost:8080 (docker-compose.yml:1-7 mapea "8080:80").
+
+------------------------------------------------------------------------------
+0. PREPARACION (hacer una sola vez, 5 minutos)
+------------------------------------------------------------------------------
+
+0.1 Levantar el juego con Docker:
+  Paso 1: abre PowerShell en la carpeta del proyecto (donde esta docker-compose.yml).
+  Paso 2: ejecuta:
+    docker compose up --build
+  Paso 3: abre el navegador en:
+    http://localhost:8080/login.php
+  Que ver: la pantalla "TERMINAL DE ACCESO". Si ves error de Mongo, revisa
+  tu archivo .env (variable MONGODB_URI). Ver config/database.php:19-25.
+
+0.2 Crear las cuentas demo (si no existen):
+  Paso 1: en otra terminal ejecuta:
+    php scripts/crear_usuarios_demo.php
+  Esto crea (ver scripts/crear_usuarios_demo.php:33-34):
+    Admin   : admin_nixon@nixon.fear  / Admin123!  (rol admin)
+    Jugador : player_nixon@nixon.fear / Player123! (rol jugador)
+  Paso 2: para la prueba IDOR necesitas UN SEGUNDO JUGADOR. Registra uno
+  a mano en http://localhost:8080/register.php (ejemplo):
+    player2@nixon.fear / Player123!
+  O usa curl (ver paso T01 para el token CSRF primero).
+
+0.3 Como obtener el token CSRF (lo necesitaras en casi todo):
+  Opcion A (navegador, facil para demo):
+    1. Abre http://localhost:8080/levels/level1.php (logueado).
+    2. Pulsa F12 > pestana Consola, escribe:
+         window.NIXON.csrfToken
+       y copia el valor. Ver public/levels/level1.php:41-44.
+    3. En login/register/notes el token tambien esta en el HTML como:
+         <input type="hidden" name="csrf_token" value="...">
+       Ver public/login.php:65. Click derecho > Ver codigo fuente, copia value.
+  Opcion B (curl, para jar/cookies):
+    1. GET login para cookie + token:
+         curl -c jar.txt http://localhost:8080/login.php -o login.html
+       Abre login.html, busca csrf_token, copia el value en TOKEN.
+  Guarda en variables de tu terminal (PowerShell):
+    $BASE="http://localhost:8080"
+    Usa -b jar.txt -c jar.txt en cada curl para mantener sesion.
+    Usa un jar distinto por usuario: jarA.txt (jugador1), jarB.txt (jugador2), jarAdmin.txt.
+
+0.4 Crear 2 notas, una por usuario (para IDOR T03/T04):
+  Paso 1: loguea jugador A (player_nixon) y saca su TOKEN_A (opcion A/B).
+  Paso 2: crea nota de A:
+    curl -b jarA.txt -c jarA.txt -X POST "$BASE/api/notes_create.php" `
+      -H "Content-Type: application/json" `
+      -d '{"level":"level1","category":"libreta","note_text":"nota secreta A","impact":"normal","csrf_token":"TOKEN_A"}'
+  Esperado: HTTP 201 cuerpo exacto:
+    {"status":"success","message":"NOTA REGISTRADA EN EL ARCHIVERO.","id":"<24hex>"}
+  Ver public/api/notes_create.php:99. Guarda el id como ID_A.
+  Paso 3: repite con jugador B (player2), guarda ID_B.
+  Como ver los id despues: GET "$BASE/api/notes_list.php?level=level1" con cada jar.
+  Ver public/api/notes_list.php:77-78.
+
+0.5 Donde mirar en el navegador (para TODAS las pruebas):
+  F12 > pestana Network (Red): haz click en cada peticion y mira:
+    - Status (codigo HTTP), Response Headers (Allow, Location, Set-Cookie,
+      Content-Security-Policy, HX-Redirect), Response/Preview (cuerpo JSON).
+  F12 > Application > Cookies: mira PHPSESSID (HttpOnly, SameSite=Strict,
+  Secure solo en HTTPS). Tras login el valor CAMBIA (regenerate).
+  F12 > Consola: para los fetch() de T03/T04/T08.
+
+------------------------------------------------------------------------------
+T01 — LOGIN VALIDO (302 + regenerate + rotate CSRF)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Navegador: ve a $BASE/login.php. Click en CORREO y CLAVE, escribe
+     player_nixon@nixon.fear / Player123!, click [ AUTORIZAR ACCESO ].
+  2. Curl equivalente (con TOKEN sacado de login.html):
+     curl -i -c jarA.txt -b jarA.txt -d "email=player_nixon@nixon.fear&password=Player123!&csrf_token=TOKEN" "$BASE/login.php"
+COMO mirar:
+  Network: click en login.php > Headers. Response Headers: Location + Set-Cookie.
+  Application > Cookies: anota PHPSESSID antes y despues de login. Deben ser
+  DISTINTOS (ver src/Controllers/AuthController.php:340 + src/Security/Sesion.php:51-56).
+QUE SE ESPERA:
+  HTTP 302, cabecera Location: welcome.php (ver public/login.php:20-22).
+  Set-Cookie: PHPSESSID=<NUEVO VALOR> (regenerate anti-fijacion).
+  Token CSRF anterior ya no vale (ver AuthController.php:348 rotateCsrf).
+  Si fallas la clave, NO hay 302: ver T02.
+
+------------------------------------------------------------------------------
+T02 — LOGIN INVALIDO / ANTI-ENUMERACION (mismo mensaje siempre)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Caso 1 (correo que NO existe):
+     curl -c jar.txt -b jar.txt -d "email=nadie@nixon.fear&password=xxx12345&csrf_token=TOKEN" "$BASE/login.php" -o out1.html
+  2. Caso 2 (correo real + clave mala):
+     curl -c jar.txt -b jar.txt -d "email=player_nixon@nixon.fear&password=Mala1234&csrf_token=TOKEN" "$BASE/login.php" -o out2.html
+  3. Abre out1.html y out2.html, busca el div class="terminal-error".
+COMO mirar:
+  Network > login.php > Preview/Response. No mires el Status, mira el TEXTO.
+  Codigo real: src/Controllers/AuthController.php:335-338 (login) y :255-263 (register).
+QUE SE ESPERA:
+  Ambos casos muestran el texto EXACTO (con punto final y mayuscula inicial):
+    Credenciales inválidas.
+  NUNCA dice "usuario no existe" ni "clave incorrecta". A proposito, para que
+  un atacante no pueda adivinar que correos existen.
+  Repite 6 veces seguidas: el 6to sigue diciendo lo mismo (bloqueo invisible, ver T09).
+
+------------------------------------------------------------------------------
+T03 — IDOR LECTURA (403 ajena / 200 propia / 404 inexistente)
+------------------------------------------------------------------------------
+QUE hacer (ya tienes ID_A de la preparacion 0.4):
+  1. Jugador B intenta leer nota de A (ataque):
+     curl -b jarB.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  2. Jugador A lee su propia nota (legitimo):
+     curl -b jarA.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  3. ID inexistente pero con formato valido (24 hex inventado):
+     curl -b jarA.txt "$BASE/api/notes_get.php?id=000000000000000000000000" -i
+  4. ID malformado:
+     curl -b jarA.txt "$BASE/api/notes_get.php?id=hola" -i
+  5. Consola del navegador (logueado como B, F12 > Consola):
+     fetch("/api/notes_get.php?id=ID_A", {credentials:"include"}).then(r=>r.text().then(t=>console.log(r.status,t)))
+COMO mirar:
+  Network > notes_get.php > Status + Preview. Fijate que el cuerpo es JSON
+  con llaves status/message. Codigo: public/api/notes_get.php:66-74.
+QUE SE ESPERA (cuerpos exactos, ver public/api/notes_get.php:31-40):
+  1. Ajena (B lee A): HTTP 403
+     {"status":"error","message":"ACCESO DENEGADO."}
+  2. Propia (A lee A): HTTP 200
+     {"status":"success","message":"NOTA RECUPERADA.","note":{...}}
+  3. Inexistente: HTTP 404
+     {"status":"error","message":"NOTA NO ENCONTRADA."}
+  4. Malformado: HTTP 400
+     {"status":"error","message":"IDENTIFICADOR INVÁLIDO."}
+  Clave demo: 403 != 404. El 403 confirma que el ID existe pero no es tuyo;
+  el 404 que no existe nada con ese ID. Ver detalle en docs/justificacion_IDOR.txt.
+
+------------------------------------------------------------------------------
+T04 — IDOR BORRADO / EDICION AJENA (403, la nota sobrevive)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. B intenta BORRAR nota de A (necesita TOKEN_B de su propia sesion):
+     curl -b jarB.txt -X DELETE "$BASE/api/notes_delete.php" -H "Content-Type: application/json" -d '{"id":"ID_A","csrf_token":"TOKEN_B"}' -i
+     Codigo: public/api/notes_delete.php:97-103 (puerta IDOR).
+  2. B intenta EDITAR nota de A:
+     curl -b jarB.txt -X PUT "$BASE/api/notes_update.php" -H "Content-Type: application/json" -d '{"id":"ID_A","note_text":"hackeo","csrf_token":"TOKEN_B"}' -i
+     Codigo: public/api/notes_update.php:115-121. Solo acepta PUT/PATCH.
+  3. Verifica que la nota de A SIGUE viva:
+     curl -b jarA.txt "$BASE/api/notes_get.php?id=ID_A" -i
+COMO mirar:
+  Network > notes_delete.php / notes_update.php > Status + Preview.
+  El CSRF va en el CUERPO JSON (o cabecera X-CSRF-Token), nunca en ?query.
+  Ver public/api/notes_delete.php:47-54.
+QUE SE ESPERA:
+  Borrado ajeno: HTTP 403 {"status":"error","message":"ACCESO DENEGADO."}
+  Edicion ajena: HTTP 403 {"status":"error","message":"ACCESO DENEGADO."}
+  Verificacion paso 3: HTTP 200 {"status":"success","message":"NOTA RECUPERADA.",...}
+  Si B usa token malo o vacio, tambien 403 pero con otro mensaje:
+    HTTP 403 {"status":"error","message":"TOKEN DE SEGURIDAD INVÁLIDO."}
+  Si B intenta pasar user_id de otro en el cuerpo (rama admin-ajena):
+    HTTP 403 {"status":"error","message":"ACCESO DENEGADO."}
+    Ver public/api/notes_delete.php:68-79 y notes_update.php:86-97.
+
+------------------------------------------------------------------------------
+T05 — ADMIN GLOBAL (200, ve todo + bitacora)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Navegador: login como admin_nixon@nixon.fear / Admin123!
+  2. Ve a $BASE/admin/notes.php (dashboard Game Master).
+     Codigo: public/admin/notes.php:1 -> src/Controllers/AdminNotesController.php:43-81.
+  3. Como admin, lee la nota de A (que a B le dio 403):
+     curl -b jarAdmin.txt "$BASE/api/notes_get.php?id=ID_A" -i
+  4. Busqueda global GM:
+     curl -b jarAdmin.txt "$BASE/api/admin_notes_search.php?level=todos&q=" -i
+     (sin HX-Request devuelve JSON; con HX-Request devuelve parcial HTML).
+  5. Mira la bitacora: en el dashboard GM, pestana/seccion bitacora (audit_log).
+COMO mirar:
+  Network > admin/notes.php > Status. Debe ser 200 con tabla de notas de TODOS.
+  Application > Cookies: sigues siendo admin (rol admin en sesion).
+QUE SE ESPERA:
+  Dashboard: HTTP 200 (HTML con todas las notas).
+  notes_get como admin con ID_A: HTTP 200 {"status":"success","message":"NOTA RECUPERADA.",...}
+  (admin salta ownership: src/Models/NotesModel.php:200-219, rol admin -> findOne({_id})).
+  admin_notes_search: HTTP 200 (JSON o HTML segun HX-Request).
+  Bitacora: entradas nuevas tipo admin.notes.dashboard / admin.notes.search = ok.
+
+------------------------------------------------------------------------------
+T06 — AUTH REQUERIDA (302 pagina / 401 API / HX-Redirect)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Navegador privado / sin cookies (o borra cookies): ve a $BASE/notes.php
+  2. Sin cookies, pide API:
+     curl "$BASE/api/notes_get.php?id=ID_A" -i
+     curl "$BASE/api/notes_list.php?level=level1" -i
+  3. Con HTMX (simula el panel):
+     curl -H "HX-Request: true" "$BASE/api/notes_search.php?level=todos" -i
+COMO mirar:
+  Network: en pagina busca Response Headers > Location. En API busca cuerpo JSON.
+  Codigo pagina: src/Controllers/NotesController.php:192-222 (handleUnauthenticated).
+  Codigo API: public/api/notes_get.php:45-47, notes_list.php:37-39.
+QUE SE ESPERA:
+  Pagina sin login: HTTP 302 Location: login.php (te manda al login).
+  API sin login: HTTP 401 {"status":"error","message":"SESIÓN NO AUTORIZADA.",...}
+  HTMX sin login: HTTP 200 con HTML parcial + cabecera HX-Redirect: login.php
+  (el parcial dice unauthorized, no rompe la pagina). Ver NotesController.php:194-204.
+
+------------------------------------------------------------------------------
+T07 — CONTRATO 405 + Allow (metodo equivocado)
+------------------------------------------------------------------------------
+QUE hacer (todos con sesion valida jarA.txt):
+  1. GET a endpoint POST-only:
+     curl -i -b jarA.txt "$BASE/api/notes_create.php"
+  2. POST a endpoint GET-only:
+     curl -i -X POST -b jarA.txt "$BASE/api/notes_get.php?id=ID_A"
+  3. POST a search GET-only:
+     curl -i -X POST -b jarA.txt "$BASE/api/notes_search.php?level=todos"
+  4. PUT a delete (que acepta POST,DELETE):
+     curl -i -X PUT -b jarA.txt "$BASE/api/notes_delete.php" -H "Content-Type: application/json" -d '{"id":"ID_A","csrf_token":"TOKEN_A"}'
+  5. GET a validate_step (POST-only):
+     curl -i -b jarA.txt "$BASE/api/validate_step.php?step=Documento1"
+COMO mirar:
+  Network > click peticion > Headers > busca cabecera Allow + Status 405.
+  Codigos: notes_create.php:42-45 (Allow: POST), notes_get.php:49-52 (Allow: GET),
+  notes_search.php:34-44 (Allow: GET), notes_delete.php:37-40 (Allow: POST, DELETE),
+  notes_update.php:37-43 (Allow: PUT, PATCH), validate_step.php:50-53 (Allow: POST),
+  save_notes.php:45-48, save_progress.php:25-28, reset_level.php:46-49.
+QUE SE ESPERA (ejemplos exactos):
+  1. HTTP 405 Allow: POST {"status":"error","message":"MÉTODO NO PERMITIDO."}
+  2. HTTP 405 Allow: GET {"status":"error","message":"MÉTODO NO PERMITIDO."}
+  3. HTTP 405 Allow: GET (JSON o parcial HTMX con mismo mensaje)
+  4. HTTP 405 Allow: POST, DELETE {"status":"error","message":"MÉTODO NO PERMITIDO."}
+  5. HTTP 405 (validate_step devuelve progress actual + MÉTODO NO PERMITIDO.)
+  Nota demo: el logout tambien es POST+CSRF only (GET no cierra sesion).
+
+------------------------------------------------------------------------------
+T08 — CSRF (403 sin/malo, 200 con bueno, nunca en query)
+------------------------------------------------------------------------------
+QUE hacer (usa TOKEN_A valido de window.NIXON o hidden input):
+  1. POST mutante SIN token:
+     curl -b jarA.txt -X POST "$BASE/api/save_progress.php" -H "Content-Type: application/json" -d '{"level":"level1","step":1,"completed":false}' -i
+     Codigo: public/api/save_progress.php:36-39.
+  2. POST con token MALO (de otra sesion o inventado):
+     curl -b jarA.txt -X POST "$BASE/api/save_progress.php" -H "Content-Type: application/json" -d '{"level":"level1","step":1,"completed":false,"csrf_token":"malo123"}' -i
+  3. POST con token en QUERY (prohibido, debe fallar):
+     curl -b jarA.txt -X POST "$BASE/api/save_progress.php?csrf_token=TOKEN_A" -H "Content-Type: application/json" -d '{"level":"level1","step":1,"completed":false}' -i
+  4. POST con token BUENO en cuerpo (ok):
+     curl -b jarA.txt -X POST "$BASE/api/save_progress.php" -H "Content-Type: application/json" -d '{"level":"level1","step":1,"completed":false,"csrf_token":"TOKEN_A"}' -i
+  5. POST con token bueno en CABECERA (ok, para fetch):
+     curl -b jarA.txt -X POST "$BASE/api/save_progress.php" -H "Content-Type: application/json" -H "X-CSRF-Token: TOKEN_A" -d '{"level":"level1","step":1,"completed":false}' -i
+  6. Consola navegador: token viejo tras re-login ya no vale (rotate).
+     Ver src/Controllers/AuthController.php:340-348 y 364-370.
+COMO mirar:
+  Network > save_progress.php > Preview. Compara los 5 cuerpos.
+  Codigo CSRF: src/Security/Csrf.php:25-31 (hash_equals) + AuthController.php:133-142.
+QUE SE ESPERA:
+  1. Sin token: HTTP 403 {"status":"error","message":"TOKEN DE SEGURIDAD INVÁLIDO."}
+  2. Token malo: HTTP 403 mismo cuerpo.
+  3. Token en query: HTTP 403 mismo cuerpo (se ignora el query, nunca se lee).
+  4. Token bueno cuerpo: HTTP 200 {"status":"success","message":"PROGRESO GUARDADO."}
+  5. Token bueno cabecera: HTTP 200 mismo cuerpo.
+  Tras login/logout el token viejo da 403 (rotate). Ver src/Security/Csrf.php:33-36.
+
+------------------------------------------------------------------------------
+T09 — RATE-LIMIT INVISIBLE (5 fallos -> bloqueo 60s x N, sin avisar)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Abre ventana privada (sesion limpia, el contador vive en $_SESSION).
+     Codigo: src/Controllers/AuthController.php:40-117.
+  2. Falla 5 veces el login (correo real + clave mala):
+     for ($i=1; $i -le 5; $i++) { curl -c jarRL.txt -b jarRL.txt -d "email=player_nixon@nixon.fear&password=Mala1234&csrf_token=TOKEN" "$BASE/login.php" -o nulo.html }
+     Saca TOKEN fresco de login.html antes (el token rota tras exito, no tras fallo).
+  3. 6to intento: usa la CLAVE CORRECTA dentro de la ventana de bloqueo:
+     curl -c jarRL.txt -b jarRL.txt -d "email=player_nixon@nixon.fear&password=Player123!&csrf_token=TOKEN" "$BASE/login.php" -o ok.html
+  4. Espera 60 segundos (o 120s si ya te bloqueaste 2 veces: 60s x blocks), reintenta el paso 3.
+COMO mirar:
+  No hay cabecera ni mensaje que diga "bloqueado". Esa es la gracia.
+  Solo en el SERVIDOR se ve $_SESSION['auth_rate']['login'] = {count, blocked_until, blocks}.
+  Network > login.php > Preview: siempre el mismo texto.
+QUE SE ESPERA:
+  Intentos 1-5: "Credenciales inválidas." (ver AuthController.php:336-337).
+  Intento 6 (aunque la clave sea correcta y estes bloqueado):
+    Tambien "Credenciales inválidas." (ver AuthController.php:309-311).
+    NO dice "demasiados intentos" ni "espera 60s". Es invisible a proposito
+    para no revelar el estado del bloqueo ni si el correo existe.
+  Tras esperar 60s x N bloqueos: el login correcto vuelve a dar 302 a welcome.php.
+  Register tiene su propio contador separado (scope register, mismo 5 x 60s).
+
+------------------------------------------------------------------------------
+T10 — REDIRECTS + GATES DE JUEGO (quien puede entrar donde + flujo win/lose)
+------------------------------------------------------------------------------
+QUE hacer:
+  1. Sin login: ve a $BASE/levels/level1.php y a $BASE/levels.php
+  2. Con jugador (jarA): ve a $BASE/levels/level1.php (debe abrir el juego Phaser).
+  3. Con jugador: intenta entrar al panel GM $BASE/admin/notes.php
+     curl -b jarA.txt -c jarA.txt "$BASE/admin/notes.php" -i
+     Codigo: src/Controllers/AdminNotesController.php:307-347 (denyIfNotAdmin) + :191-201 requireRole.
+  4. Juega el nivel 1 en orden (ver secuencia_nivel1.txt y STEP_ORDER en
+     public/api/validate_step.php:29): Documento1 > Archivero > Documento 2 > Computadora > Cajafuerte.
+     Cada click correcto suma 20% (validate_step.php:93-96). El estado vive en
+     $_SESSION['level1_step'], no en el cliente (validate_step.php:73-76).
+  5. Al perder (tiempo/paranoia): el juego llama POST api/reset_level.php y te
+     manda a gameover.php. Al ganar: POST api/save_notes.php + save_progress.php
+     y te manda a level1_complete.php -> levels.php.
+COMO mirar:
+  Network: busca Status 302 + cabecera Location en los redirects.
+  Preview de validate_step: {"status":"success","progress":20,...} por paso.
+  ?reset=1 en level1.php solo limpia sesion (303 a level1.php), el reset real
+  con borrado Mongo es POST reset_level.php. Ver public/levels/level1.php:12-21.
+QUE SE ESPERA:
+  Sin login a level1: HTTP 302 Location: ../login.php (ver level1.php:10 requireAuth).
+  Jugador a admin/notes.php: HTTP 403 ACCESO DENEGADO. + evento audit_log (denegado).
+  Admin a admin/notes.php: HTTP 200 dashboard.
+  validate_step paso correcto: HTTP 200 {"status":"success","progress":20,"message":"Paso registrado correctamente.","completed":false}
+  validate_step fuera de orden: HTTP 200 {"status":"error","progress":<actual>,"message":"ORDEN INCORRECTO.","completed":false}
+  (ojo: validate_step usa 200 para error de juego, y 401/403/405 solo para seguridad/metodo).
+  Objeto desconocido: HTTP 400 {"status":"error","message":"OBJETO NO RECONOCIDO.",...}
+  reset_level ok: HTTP 200 {"status":"success","message":"NIVEL REINICIADO."}
+
+------------------------------------------------------------------------------
+ANEXO: TABLA RAPIDA HTTP + CUERPO (para el jurado)
+------------------------------------------------------------------------------
+401 SESIÓN NO AUTORIZADA.   -> sin login en API (notes_*.php, save_*, reset, validate).
+403 TOKEN DE SEGURIDAD INVÁLIDO. -> CSRF malo/ausente (todos los POST/PUT/PATCH/DELETE).
+403 ACCESO DENEGADO.        -> IDOR (nota ajena) o user_id ajeno sin ser admin, o jugador en panel GM.
+404 NOTA NO ENCONTRADA.     -> ID valido pero no existe nada (o admin con ID inexistente).
+400 IDENTIFICADOR INVÁLIDO. / NIVEL INVÁLIDO. / LÍMITE INVÁLIDO. etc. -> entrada malformada.
+405 MÉTODO NO PERMITIDO. + Allow exacto -> metodo HTTP equivocado.
+201 NOTA REGISTRADA EN EL ARCHIVERO. (create) / 200 NOTA RECUPERADA. (get) /
+200 ARCHIVERO RECUPERADO. (list) / 200 NOTA ACTUALIZADA. (update) /
+200 NOTA ELIMINADA DEL ARCHIVERO. (delete) / 200 PROGRESO GUARDADO. / 200 NIVEL REINICIADO.
+302 Location: login/welcome + Set-Cookie nuevo -> login valido / pagina sin auth.
+Credenciales inválidas. (con punto, C mayuscula) -> todo fallo de login/register/bloqueo.
